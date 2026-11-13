@@ -1,0 +1,28 @@
+@import 'leaflet/dist/leaflet.css';
+@import 'tailwindcss';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+
+@theme {
+    --font-sans: ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
+        'Noto Color Emoji';
+}
+
+@layer base {
+    body {
+        @apply bg-stone-50 text-stone-900 antialiased;
+    }
+
+    button,
+    a,
+    input,
+    select,
+    textarea {
+        @apply focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700;
+    }
+}
+
+.safe-area-bottom {
+    padding-bottom: max(env(safe-area-inset-bottom), 0.75rem);
+}

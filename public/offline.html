@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#047857">
+    <title>You're offline · ACR Rides</title>
+    <style>
+        :root { color-scheme: light; font-family: system-ui, sans-serif; background: #f5f5f4; color: #1c1917; }
+        body { box-sizing: border-box; display: grid; min-height: 100vh; margin: 0; place-items: center; padding: 1.5rem; }
+        main { width: min(100%, 28rem); border-radius: 1.5rem; background: white; padding: 2rem; text-align: center; box-shadow: 0 12px 40px #00000012; }
+        h1 { margin: 0; color: #065f46; }
+        p { line-height: 1.6; color: #57534e; }
+        button { min-height: 3rem; border: 0; border-radius: .75rem; background: #047857; padding: .5rem 1.25rem; color: white; font: inherit; font-weight: 700; }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>You're offline</h1>
+        <p>Reconnect to the internet to book a ride or view the latest trip information.</p>
+        <button type="button" onclick="window.location.reload()">Try again</button>
+    </main>
+</body>
+</html>

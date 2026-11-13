@@ -1,0 +1,18 @@
+{
+    "name": "Affi Campbellpur Rides",
+    "short_name": "ACR Rides",
+    "description": "Local rides in Attock and nearby areas.",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#047857",
+    "icons": [
+        {
+            "src": "/icons/acr-icon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        }
+    ]
+}
