@@ -76,17 +76,17 @@ class RideEngineService
 
         $radius = (float) Setting::get('search_radius_km', '5');
         $timeout = (int) Setting::get('ride_request_timeout_seconds', 60);
-        $distance = '(6371 * acos(MIN(1, MAX(-1, cos(radians(?)) * cos(radians(rides.pickup_lat)) * cos(radians(rides.pickup_lng) - radians(?)) + sin(radians(?)) * sin(radians(rides.pickup_lat))))))';
+        [$distance, $bindings] = RiderProfile::nearbyDistanceExpression(
+            'rides.pickup_lat',
+            'rides.pickup_lng',
+            (float) $profile->current_lat,
+            (float) $profile->current_lng,
+        );
 
         return Ride::query()
             ->where('status', RideStatus::Searching->value)
             ->where('created_at', '>=', now()->subSeconds($timeout))
-            ->whereRaw("{$distance} <= (0 + ?)", [
-                (float) $profile->current_lat,
-                (float) $profile->current_lng,
-                (float) $profile->current_lat,
-                $radius,
-            ])
+            ->whereRaw("{$distance} <= (0 + ?)", [...$bindings, $radius])
             ->latest()
             ->limit(10)
             ->get(['id', 'pickup_address', 'dropoff_address', 'distance_km', 'estimated_fare', 'created_at'])
@@ -274,6 +274,24 @@ class RideEngineService
             ->minus($commission)
             ->toScale(2, RoundingMode::HalfUp);
         $minimumWallet = BigDecimal::of((string) Setting::get('minimum_rider_wallet_limit', '100.00'));
+
+        if ($newBalance->isLessThan(BigDecimal::zero())) {
+            throw ValidationException::withMessages([
+                'wallet' => __('This ride cannot be completed because the commission would make the rider wallet negative.'),
+            ]);
+        }
+
+        $existingCommission = WalletTransaction::query()
+            ->where('ride_id', $ride->id)
+            ->where('type', WalletTransactionType::CommissionDeduction)
+            ->lockForUpdate()
+            ->exists();
+
+        if ($existingCommission) {
+            throw ValidationException::withMessages([
+                'wallet' => __('The commission for this ride has already been recorded.'),
+            ]);
+        }
 
         $ride->update([
             'status' => RideStatus::Completed,

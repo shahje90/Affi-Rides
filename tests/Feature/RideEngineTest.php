@@ -9,7 +9,9 @@ use App\Enums\WalletTransactionType;
 use App\Models\Ride;
 use App\Models\RiderProfile;
 use App\Models\User;
+use App\Models\WalletTransaction;
 use App\Services\RideEngineService;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
@@ -133,6 +135,81 @@ class RideEngineTest extends TestCase
         $this->assertSame([$nearbyRide->id], array_column($requests, 'id'));
     }
 
+    public function test_riders_at_the_radius_boundary_are_included_and_distant_riders_are_excluded(): void
+    {
+        $ride = Ride::factory()->create([
+            'pickup_lat' => '0.00000000',
+            'pickup_lng' => '0.00000000',
+        ]);
+        $boundary = $this->makeRiderProfile([
+            'is_online' => true,
+            'kyc_status' => KycStatus::Approved,
+            'wallet_balance' => '500.00',
+            'current_lat' => '0.00000000',
+            'current_lng' => (string) rad2deg(5 / 6371),
+            'last_location_updated_at' => now(),
+        ]);
+        $this->makeRiderProfile([
+            'is_online' => true,
+            'kyc_status' => KycStatus::Approved,
+            'wallet_balance' => '500.00',
+            'current_lat' => '0.00000000',
+            'current_lng' => '1.00000000',
+            'last_location_updated_at' => now(),
+        ]);
+
+        $riders = app(RideEngineService::class)->nearbyEligibleRiders($ride);
+
+        $this->assertContains($boundary->id, $riders->modelKeys());
+        $this->assertCount(1, $riders);
+    }
+
+    public function test_proximity_ignores_null_coordinates_expired_locations_offline_pending_and_active_riders(): void
+    {
+        $ride = Ride::factory()->create([
+            'pickup_lat' => '33.76670000',
+            'pickup_lng' => '72.35920000',
+        ]);
+        $eligible = $this->makeRiderProfile([
+            'is_online' => true,
+            'kyc_status' => KycStatus::Approved,
+            'wallet_balance' => '500.00',
+            'current_lat' => '33.76670000',
+            'current_lng' => '72.35920000',
+            'last_location_updated_at' => now(),
+        ]);
+        foreach ([
+            ['current_lat' => null, 'current_lng' => null],
+            ['last_location_updated_at' => now()->subMinutes(4)],
+            ['is_online' => false],
+            ['kyc_status' => KycStatus::Pending],
+        ] as $attributes) {
+            $this->makeRiderProfile([
+                'is_online' => true,
+                'kyc_status' => KycStatus::Approved,
+                'wallet_balance' => '500.00',
+                'current_lat' => '33.76670000',
+                'current_lng' => '72.35920000',
+                'last_location_updated_at' => now(),
+                ...$attributes,
+            ]);
+        }
+        $active = $this->makeRiderProfile([
+            'is_online' => true,
+            'kyc_status' => KycStatus::Approved,
+            'wallet_balance' => '500.00',
+            'current_lat' => '33.76670000',
+            'current_lng' => '72.35920000',
+            'last_location_updated_at' => now(),
+        ]);
+        Ride::factory()->create([
+            'rider_id' => $active->user_id,
+            'status' => RideStatus::InProgress,
+        ]);
+
+        $this->assertSame([$eligible->id], app(RideEngineService::class)->nearbyEligibleRiders($ride)->modelKeys());
+    }
+
     public function test_ride_completion_deducts_commission_and_takes_low_balance_rider_offline(): void
     {
         $profile = $this->makeRiderProfile([
@@ -168,6 +245,95 @@ class RideEngineTest extends TestCase
             'balance_after' => '93.00',
             'status' => WalletTransactionStatus::Approved->value,
         ]);
+    }
+
+    public function test_ride_completion_rejects_a_commission_that_would_make_the_wallet_negative(): void
+    {
+        $profile = $this->makeRiderProfile([
+            'is_online' => true,
+            'kyc_status' => KycStatus::Approved,
+            'wallet_balance' => '100.00',
+            'current_lat' => '33.76670000',
+            'current_lng' => '72.35920000',
+            'last_location_updated_at' => now(),
+        ]);
+        $ride = Ride::factory()->create([
+            'pickup_lat' => '33.76670000',
+            'pickup_lng' => '72.35920000',
+            'estimated_fare' => '1000.00',
+        ]);
+
+        $engine = app(RideEngineService::class);
+        $engine->accept($ride->id, $profile->user);
+        $engine->transition($profile->user, $ride->id, RideStatus::Arrived);
+        $engine->transition($profile->user, $ride->id, RideStatus::InProgress);
+
+        try {
+            $engine->transition($profile->user, $ride->id, RideStatus::Completed);
+            $this->fail('A commission deduction must not make the wallet negative.');
+        } catch (ValidationException $exception) {
+            $this->assertArrayHasKey('wallet', $exception->errors());
+        }
+
+        $this->assertSame('100.00', $profile->fresh()->wallet_balance);
+        $this->assertSame(RideStatus::InProgress, $ride->fresh()->status);
+        $this->assertDatabaseMissing('wallet_transactions', ['ride_id' => $ride->id]);
+    }
+
+    public function test_duplicate_commission_entries_for_one_ride_are_rejected(): void
+    {
+        $profile = $this->makeRiderProfile([]);
+        $ride = Ride::factory()->create(['rider_id' => $profile->user_id]);
+
+        WalletTransaction::factory()->create([
+            'rider_id' => $profile->user_id,
+            'ride_id' => $ride->id,
+            'type' => WalletTransactionType::CommissionDeduction,
+            'status' => WalletTransactionStatus::Approved,
+        ]);
+
+        $this->expectException(QueryException::class);
+        WalletTransaction::factory()->create([
+            'rider_id' => $profile->user_id,
+            'ride_id' => $ride->id,
+            'type' => WalletTransactionType::CommissionDeduction,
+            'status' => WalletTransactionStatus::Approved,
+        ]);
+    }
+
+    public function test_duplicate_ride_completion_does_not_create_a_second_commission_entry(): void
+    {
+        $profile = $this->makeRiderProfile([
+            'is_online' => true,
+            'kyc_status' => KycStatus::Approved,
+            'wallet_balance' => '105.00',
+            'current_lat' => '33.76670000',
+            'current_lng' => '72.35920000',
+            'last_location_updated_at' => now(),
+        ]);
+        $ride = Ride::factory()->create([
+            'pickup_lat' => '33.76670000',
+            'pickup_lng' => '72.35920000',
+            'estimated_fare' => '80.00',
+        ]);
+        $engine = app(RideEngineService::class);
+
+        $engine->accept($ride->id, $profile->user);
+        $engine->transition($profile->user, $ride->id, RideStatus::Arrived);
+        $engine->transition($profile->user, $ride->id, RideStatus::InProgress);
+        $engine->transition($profile->user, $ride->id, RideStatus::Completed);
+
+        try {
+            $engine->transition($profile->user, $ride->id, RideStatus::Completed);
+            $this->fail('A completed ride must not be completed twice.');
+        } catch (ValidationException $exception) {
+            $this->assertArrayHasKey('status', $exception->errors());
+        }
+
+        $this->assertSame(1, WalletTransaction::query()
+            ->where('ride_id', $ride->id)
+            ->where('type', WalletTransactionType::CommissionDeduction)
+            ->count());
     }
 
     public function test_expired_searches_are_cancelled_with_retry_reason_and_stale_riders_go_offline(): void

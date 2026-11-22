@@ -94,6 +94,47 @@ class AdminWalletTest extends TestCase
         ]);
     }
 
+    public function test_admin_cannot_adjust_a_wallet_below_zero(): void
+    {
+        [$admin, $rider, $profile] = $this->accounts();
+
+        $this->from(route('admin.dashboard'))
+            ->actingAs($admin)
+            ->post(route('admin.wallet.adjustments.store'), [
+                'rider_id' => $rider->id,
+                'amount' => '-0.01',
+                'admin_note' => 'Invalid underflow.',
+            ])
+            ->assertSessionHasErrors('amount');
+
+        $this->assertSame('0.00', $profile->fresh()->wallet_balance);
+        $this->assertDatabaseMissing('wallet_transactions', [
+            'rider_id' => $rider->id,
+            'type' => WalletTransactionType::Adjustment->value,
+        ]);
+    }
+
+    public function test_admin_can_make_a_negative_adjustment_without_underflow(): void
+    {
+        [$admin, $rider, $profile] = $this->accounts();
+        $profile->update(['wallet_balance' => '100.00']);
+
+        $this->actingAs($admin)->post(route('admin.wallet.adjustments.store'), [
+            'rider_id' => $rider->id,
+            'amount' => '-25.25',
+            'admin_note' => 'Verified deduction.',
+        ])->assertRedirect();
+
+        $this->assertSame('74.75', $profile->fresh()->wallet_balance);
+        $this->assertDatabaseHas('wallet_transactions', [
+            'rider_id' => $rider->id,
+            'type' => WalletTransactionType::Adjustment->value,
+            'amount' => '-25.25',
+            'balance_after' => '74.75',
+            'status' => WalletTransactionStatus::Approved->value,
+        ]);
+    }
+
     public function test_pending_alarm_feed_is_admin_only_and_includes_pending_riders(): void
     {
         [$admin, $rider] = $this->accounts();

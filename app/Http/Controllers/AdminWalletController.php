@@ -47,6 +47,12 @@ class AdminWalletController extends Controller
                 ->plus($amount)
                 ->toScale(2, RoundingMode::HalfUp);
 
+            if ($newBalance->isLessThan(BigDecimal::zero())) {
+                throw ValidationException::withMessages([
+                    'amount' => __('This adjustment cannot make the rider wallet negative.'),
+                ]);
+            }
+
             $profile->update([
                 'wallet_balance' => (string) $newBalance,
                 'is_online' => $profile->is_online && $newBalance->isGreaterThanOrEqualTo(

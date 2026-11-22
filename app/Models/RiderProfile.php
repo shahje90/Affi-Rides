@@ -60,11 +60,33 @@ class RiderProfile extends Model
 
     public function scopeNearby(Builder $query, float $lat, float $lng, float $km): Builder
     {
-        $distance = '(6371 * acos(MIN(1, MAX(-1, cos(radians(?)) * cos(radians(current_lat)) * cos(radians(current_lng) - radians(?)) + sin(radians(?)) * sin(radians(current_lat))))))';
+        [$distance, $bindings] = self::nearbyDistanceExpression('current_lat', 'current_lng', $lat, $lng);
 
         return $query
             ->whereNotNull('current_lat')
             ->whereNotNull('current_lng')
-            ->whereRaw("{$distance} <= (0 + ?)", [$lat, $lng, $lat, $km]);
+            ->whereRaw("{$distance} <= (0 + ?)", [...$bindings, $km]);
+    }
+
+    /**
+     * @return array{0: string, 1: array<int, float>}
+     */
+    public static function nearbyDistanceExpression(
+        string $latitudeColumn,
+        string $longitudeColumn,
+        float $lat,
+        float $lng,
+    ): array {
+        $cosine = "cos(radians(?)) * cos(radians({$latitudeColumn})) * cos(radians({$longitudeColumn}) - radians(?)) + sin(radians(?)) * sin(radians({$latitudeColumn}))";
+        $bindings = [];
+
+        for ($i = 0; $i < 3; $i++) {
+            array_push($bindings, $lat, $lng, $lat);
+        }
+
+        return [
+            "(6371 * acos(CASE WHEN {$cosine} > 1 THEN 1 WHEN {$cosine} < -1 THEN -1 ELSE {$cosine} END))",
+            $bindings,
+        ];
     }
 }
